@@ -794,17 +794,18 @@ if ($currentSession) {
         <?php if ($stage === 'login'): ?>
             <div class="card">
                 <h2>Member Login</h2>
-                <p style="margin-bottom: 20px; color: #666;">Enter your personal PIN to log in quickly and securely.</p>
+                <p style="margin-bottom: 20px; color: #666;">Enter your personal credential (PIN, barcode, or password) to log in quickly and securely.</p>
                 <form autocomplete="off" method="post">
                     <div class="form-group">
-                        <label for="pin">Enter your PIN</label>
-                        <input type="password" id="pin" name="pin" autocomplete="new-password" required autofocus 
-                               placeholder="Enter your unique PIN" style="height:40px; font-size: 12px; text-align: center;">
+               <label for="pin">Enter your credential</label>
+               <input type="password" id="pin" name="pin" autocomplete="new-password" required autofocus
+                   placeholder="Enter your credential (PIN, barcode, or password)" style="height:40px; font-size: 12px; text-align: center;"
+                   onkeydown="if(event.key==='Enter'){ this.form.submit(); }">
                     </div>
                     <button type="submit" name="action" value="login" class="btn" style="width: 100%; padding: 15px; font-size: 18px;">Login</button>
                 </form>
                 <div style="margin-top: 20px; padding: 10px; background-color: #e3f2fd; border-radius: 4px; font-size: 14px;">
-                    <strong>Security Note:</strong> Each member has a unique PIN. You cannot log in as another member without their PIN.
+                    <strong>Forgot ID?</strong> Please contact a leadership member for asseistance.
                 </div>
             </div>
         <?php endif; ?>
@@ -950,10 +951,10 @@ if ($currentSession) {
                             <input type="text" id="full_name" name="full_name" required>
                         </div>
                         <div class="form-group">
-                            <label for="pin">PIN (Must be unique)</label>
-                            <input type="text" id="pin" name="pin" autocomplete="off" required 
-                                   placeholder="Enter unique 4-6 digit PIN" maxlength="6" pattern="[0-9]{4,6}">
-                            <small style="color: #666;">PIN must be 4-6 digits and unique to this member</small>
+                <label for="pin">Credential (Must be unique)</label>
+                <input type="text" id="pin" name="pin" autocomplete="off" required
+                    placeholder="Enter unique credential (PIN, barcode, or password)">
+                <small style="color: #666;">Credential must be unique to this member. Letters, numbers, and symbols allowed.</small>
                         </div>
                         <button type="submit" name="action" value="add_member" class="btn">Add Member</button>
                     </form>
@@ -980,10 +981,10 @@ if ($currentSession) {
                             <input type="text" id="update_full_name" name="full_name" required>
                         </div>
                         <div class="form-group">
-                            <label for="update_pin">PIN (Must be unique)</label>
-                            <input type="text" id="update_pin" name="pin" required autocomplete="off"
-                                   placeholder="Enter unique 4-6 digit PIN" maxlength="6" pattern="[0-9]{4,6}">
-                            <small style="color: #666;">PIN must be 4-6 digits and unique to this member</small>
+                <label for="update_pin">Credential (Must be unique)</label>
+                <input type="text" id="update_pin" name="pin" required autocomplete="off"
+                    placeholder="Enter unique credential (PIN, barcode, or password)">
+                <small style="color: #666;">Credential must be unique to this member. Letters, numbers, and symbols allowed.</small>
                         </div>
                         <button type="submit" name="action" value="update_member" class="btn-warning">Update Member</button>
                     </form>
