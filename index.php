@@ -1,7 +1,9 @@
 <?php
 
+// Change this
+$auth_code = 'replace_this';
 
-$auth_code = 'change_this_for_validating_specified_computers';
+// Do Not Change
 $cookie_name = 'auth_pass';
 
 if (!isset($_COOKIE[$cookie_name]) || $_COOKIE[$cookie_name] !== $auth_code) {
@@ -66,6 +68,17 @@ $db->exec("
 ");
 
 $db->exec("
+    CREATE TABLE IF NOT EXISTS extra_hours (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        member_id INTEGER NOT NULL,
+        clock_in_time TEXT NOT NULL,
+        clock_out_time TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(member_id) REFERENCES members(id)
+    )
+");
+
+$db->exec("
     CREATE TABLE IF NOT EXISTS future_absences (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         member_id INTEGER NOT NULL,
@@ -76,19 +89,18 @@ $db->exec("
     )
 ");
 
-// Change this to a more secure admin password
-$adminPassword = 'admin';
+// Change These to a long string of random characters.
+$adminPassword = 'root';
+$adminCode = 'root-login';
+$startSessionCode = 'startsession';
+$endSessionCode = 'endsession';
 
 $adminCookieName = 'admin_auth';
 
 $stage = 'login'; 
-$validStages = ['login', 'clock', 'admin_login', 'admin'];
+$validStages = ['login', 'admin'];
 if (isset($_GET['stage']) && in_array($_GET['stage'], $validStages)) {
     $stage = $_GET['stage'];
-}
-
-if (session_status() === PHP_SESSION_NONE) {
-    session_start();
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -98,14 +110,96 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         case 'login':
             $pin = $_POST['pin'] ?? '';
             if ($pin) {
+                if ($pin === $adminCode) {
+                    setcookie($adminCookieName, '1', time() + (86400 * 30), "/"); 
+                    header("Location: ?stage=admin");
+                    exit;
+                } elseif ($pin === $startSessionCode) {
+                    
+                    
+                    // Start session
+                    
+                    
+                    $db->exec("INSERT INTO sessions (active, start_time) VALUES (1, datetime('now'))");
+                    
+                    // Extra Hours > Session Hours change
+                    
+                    $newSessionId = $db->lastInsertRowID();
+                    $extraHoursUsers = $db->query("SELECT * FROM extra_hours WHERE clock_out_time IS NULL");
+                    while ($extraUser = $extraHoursUsers->fetchArray(SQLITE3_ASSOC)) {
+                        
+                        // Clock out Extra Hours
+                        $db->exec("UPDATE extra_hours SET clock_out_time = datetime('now') WHERE id = {$extraUser['id']}");
+                        
+                        // Clock into Session
+                        $db->exec("INSERT INTO attendance (member_id, session_id, clock_in_time) VALUES ({$extraUser['member_id']}, $newSessionId, datetime('now'))");
+                    }
+                    
+                    header("Location: ?stage=login&message=Session started - Extra Hours Users Moved to Session Time");
+                    exit;
+                } elseif ($pin === $endSessionCode) {
+                    // End session
+                    $activeSession = $db->querySingle("SELECT id FROM sessions WHERE active = 1 ORDER BY id DESC LIMIT 1");
+                    if ($activeSession) {
+                        $db->exec("UPDATE attendance SET clock_out_time = datetime('now') WHERE session_id = $activeSession AND clock_out_time IS NULL");
+                        $db->exec("UPDATE sessions SET active = 0, end_time = datetime('now') WHERE id = $activeSession");
+                        
+                        // Auto discord webhook info
+                        
+                        sendDailyReport($db);
+                        
+                        header("Location: ?stage=login&message=Session ended, all users clocked out, and report sent");
+                    } else {
+                        header("Location: ?stage=login&error=No active session to end");
+                    }
+                    exit;
+                }
+                
+                // Regular member login
                 $member = $db->querySingle("SELECT * FROM members WHERE pin = '" . $db->escapeString($pin) . "'", true);
                 if ($member) {
-                    $_SESSION['member_id'] = $member['id'];
-                    $_SESSION['member_name'] = $member['full_name'];
-                    header("Location: ?stage=clock");
+                    $activeSession = $db->querySingle("SELECT id FROM sessions WHERE active = 1 ORDER BY id DESC LIMIT 1");
+                    
+                    if ($activeSession) {
+                        // Session is active - handle session attendance
+                        $existing = $db->querySingle("SELECT id FROM attendance WHERE member_id = {$member['id']} AND session_id = $activeSession AND clock_out_time IS NULL");
+                        if ($existing) {
+                            // Clock out of session
+                            $db->exec("UPDATE attendance SET clock_out_time = datetime('now') WHERE id = $existing");
+                            header("Location: ?stage=login&message=" . htmlspecialchars($member['full_name']) . " clocked out of session");
+                        } else {
+                            // Check if they're currently in extra hours and switch them
+                            $extraHours = $db->querySingle("SELECT id FROM extra_hours WHERE member_id = {$member['id']} AND clock_out_time IS NULL");
+                            if ($extraHours) {
+                                // Clock out of extra hours and into session
+                                $db->exec("UPDATE extra_hours SET clock_out_time = datetime('now') WHERE id = $extraHours");
+                                $db->exec("INSERT INTO attendance (member_id, session_id, clock_in_time) VALUES ({$member['id']}, $activeSession, datetime('now'))");
+                                header("Location: ?stage=login&message=" . htmlspecialchars($member['full_name']) . " switched from extra hours to session");
+                            } else {
+                                // Clock into session
+                                $db->exec("INSERT INTO attendance (member_id, session_id, clock_in_time) VALUES ({$member['id']}, $activeSession, datetime('now'))");
+                                header("Location: ?stage=login&message=" . htmlspecialchars($member['full_name']) . " clocked into session");
+                            }
+                        }
+                    } else {
+                        // No active session - handle extra hours
+                        $existingExtra = $db->querySingle("SELECT id FROM extra_hours WHERE member_id = {$member['id']} AND clock_out_time IS NULL");
+                        if ($existingExtra) {
+                            // Clock out of extra hours
+                            $db->exec("UPDATE extra_hours SET clock_out_time = datetime('now') WHERE id = $existingExtra");
+                            header("Location: ?stage=login&message=" . htmlspecialchars($member['full_name']) . " clocked out of extra hours");
+                        } else {
+                            // Clock into extra hours
+                            $db->exec("INSERT INTO extra_hours (member_id, clock_in_time) VALUES ({$member['id']}, datetime('now'))");
+                            header("Location: ?stage=login&message=" . htmlspecialchars($member['full_name']) . " clocked into extra hours");
+                        }
+                    }
                     exit;
                 } else {
-                    header("Location: ?stage=login&error=Invalid PIN");
+                    $wrongMessages = array("Wrong. Idk what you did, but it's wrong.", "Try again.", "Scan it again.", "You failure... Scan again.", "A baby could figure this out. C'mon.", "Scan again man...");
+                    $randomKey = array_rand($wrongMessages);
+                    $message = $wrongMessages[$randomKey];
+                    header("Location: ?stage=login&error=".$message);
                     exit;
                 }
             } else {
@@ -113,99 +207,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 exit;
             }
 
-        case 'admin_login':
-            $password = $_POST['password'] ?? '';
-            if ($password === $adminPassword) {
-                setcookie($adminCookieName, '1', time() + (86400 * 30), "/"); 
-                header("Location: ?stage=admin");
-                exit;
-            } else {
-                header("Location: ?stage=admin_login&error=Invalid password");
-                exit;
-            }
-
         case 'logout':
-            session_destroy();
+            unset($_COOKIE[$adminCookieName]);
+            setcookie($adminCookieName, '', time() - 3600, "/");
             header("Location: ?stage=login");
             exit;
-
-        case 'clock_in':
-            if (isset($_SESSION['member_id'])) {
-                $activeSession = $db->querySingle("SELECT id FROM sessions WHERE active = 1 ORDER BY id DESC LIMIT 1");
-                if ($activeSession) {
-                    $memberId = $_SESSION['member_id'];
-
-                    $existing = $db->querySingle("SELECT id FROM attendance WHERE member_id = $memberId AND session_id = $activeSession AND clock_out_time IS NULL");
-                    if (!$existing) {
-                        $db->exec("INSERT INTO attendance (member_id, session_id, clock_in_time) VALUES ($memberId, $activeSession, datetime('now'))");
-                        header("Location: ?stage=clock&message=Clocked in");
-                        exit;
-                    } else {
-                        header("Location: ?stage=clock&error=Already clocked in");
-                        exit;
-                    }
-                } else {
-                    header("Location: ?stage=clock&error=No active session");
-                    exit;
-                }
-            } else {
-                header("Location: ?stage=login");
-                exit;
-            }
-
-        case 'clock_out':
-            if (isset($_SESSION['member_id'])) {
-                $activeSession = $db->querySingle("SELECT id FROM sessions WHERE active = 1 ORDER BY id DESC LIMIT 1");
-                if ($activeSession) {
-                    $memberId = $_SESSION['member_id'];
-
-                    $attendance = $db->querySingle("SELECT id FROM attendance WHERE member_id = $memberId AND session_id = $activeSession AND clock_out_time IS NULL", true);
-                    if ($attendance) {
-                        $db->exec("UPDATE attendance SET clock_out_time = datetime('now') WHERE id = {$attendance['id']}");
-                        header("Location: ?stage=clock&message=Clocked out");
-                        exit;
-                    } else {
-                        header("Location: ?stage=clock&error=Not clocked in");
-                        exit;
-                    }
-                } else {
-                    header("Location: ?stage=clock&error=No active session");
-                    exit;
-                }
-            } else {
-                header("Location: ?stage=login");
-                exit;
-            }
-
-        case 'mark_absence':
-            if (isset($_SESSION['member_id'])) {
-                $absenceDate = $_POST['absence_date'] ?? '';
-                $reason = $_POST['reason'] ?? '';
-                if ($absenceDate && strtotime($absenceDate) >= strtotime(date('Y-m-d'))) {
-                    $memberId = $_SESSION['member_id'];
-                    
-                    // Check if absence already exists for this date
-                    $existing = $db->querySingle("SELECT id FROM future_absences WHERE member_id = $memberId AND absence_date = '" . $db->escapeString($absenceDate) . "'");
-                    if (!$existing) {
-                        $stmt = $db->prepare("INSERT INTO future_absences (member_id, absence_date, reason) VALUES (:member_id, :absence_date, :reason)");
-                        $stmt->bindValue(':member_id', $memberId, SQLITE3_INTEGER);
-                        $stmt->bindValue(':absence_date', $absenceDate, SQLITE3_TEXT);
-                        $stmt->bindValue(':reason', $reason, SQLITE3_TEXT);
-                        $stmt->execute();
-                        header("Location: ?stage=clock&message=Absence marked for " . date('M j, Y', strtotime($absenceDate)));
-                        exit;
-                    } else {
-                        header("Location: ?stage=clock&error=Absence already marked for this date");
-                        exit;
-                    }
-                } else {
-                    header("Location: ?stage=clock&error=Please select a future date");
-                    exit;
-                }
-            } else {
-                header("Location: ?stage=login");
-                exit;
-            }
     }
 
     if (isset($_COOKIE[$adminCookieName]) && $_COOKIE[$adminCookieName] === '1') {
@@ -221,7 +227,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $db->exec("UPDATE attendance SET clock_out_time = datetime('now') WHERE session_id = $activeSession AND clock_out_time IS NULL");
                     $db->exec("UPDATE sessions SET active = 0, end_time = datetime('now') WHERE id = $activeSession");
                 }
-                header("Location: ?stage=admin&message=Session ended and all users clocked out");
+                header("Location: ?stage=admin&message=Session ended and all users Clocked Out");
                 exit;
 
             case 'send_report':
@@ -249,7 +255,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         header("Location: ?stage=admin&message=Member added");
                         exit;
                     } catch (Exception $e) {
-                        header("Location: ?stage=admin&error=Error adding member");
+                        header("Location: ?stage=admin&error=Error adding member, contact KJ.");
                         exit;
                     }
                 } else {
@@ -286,6 +292,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $memberId = $_POST['member_id'] ?? '';
                 if ($memberId) {
                     $db->exec("DELETE FROM attendance WHERE member_id = $memberId");
+                    $db->exec("DELETE FROM extra_hours WHERE member_id = $memberId");
                     $db->exec("DELETE FROM members WHERE id = $memberId");
                     header("Location: ?stage=admin&message=Member deleted");
                     exit;
@@ -311,6 +318,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $confirmPassword = $_POST['confirm_password'] ?? '';
                 if ($memberId && $confirmPassword === $adminPassword) {
                     $db->exec("DELETE FROM attendance WHERE member_id = $memberId");
+                    $db->exec("DELETE FROM extra_hours WHERE member_id = $memberId");
                     header("Location: ?stage=admin&message=User statistics cleared");
                     exit;
                 } else {
@@ -323,22 +331,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $confirmPassword = $_POST['confirm_password'] ?? '';
                 if ($memberId && $confirmPassword === $adminPassword) {
                     $db->exec("DELETE FROM attendance WHERE member_id = $memberId");
+                    $db->exec("DELETE FROM extra_hours WHERE member_id = $memberId");
                     $db->exec("DELETE FROM members WHERE id = $memberId");
                     header("Location: ?stage=admin&message=User and all statistics deleted");
                     exit;
                 } else {
                     header("Location: ?stage=admin&error=Invalid password or missing member ID");
-                    exit;
-                }
-
-            case 'clear_absence':
-                $absenceId = $_POST['absence_id'] ?? '';
-                if ($absenceId) {
-                    $db->exec("DELETE FROM future_absences WHERE id = " . $db->escapeString($absenceId));
-                    header("Location: ?stage=admin&message=Absence cleared");
-                    exit;
-                } else {
-                    header("Location: ?stage=admin&error=Missing absence ID");
                     exit;
                 }
         }
@@ -349,6 +347,8 @@ function sendDailyReport($db) {
     $today = date('Y-m-d') . ' 00:00:00';
     $tomorrow = date('Y-m-d', strtotime('+1 day')) . ' 00:00:00';
 
+    // Get Session Attendance
+    
     $result = $db->query("
         SELECT a.*, m.full_name, m.username 
         FROM attendance a 
@@ -362,7 +362,25 @@ function sendDailyReport($db) {
         $todaysSessions[] = $row;
     }
 
+    // Get Extra hours
+    
+    $result = $db->query("
+        SELECT eh.*, m.full_name, m.username 
+        FROM extra_hours eh 
+        JOIN members m ON eh.member_id = m.id 
+        WHERE eh.clock_in_time >= '$today' AND eh.clock_in_time < '$tomorrow' 
+        ORDER BY eh.clock_in_time
+    ");
+
+    $todaysExtraHours = [];
+    while ($row = $result->fetchArray(SQLITE3_ASSOC)) {
+        $todaysExtraHours[] = $row;
+    }
+
     $memberAttendance = [];
+    
+    // Session attendance
+    
     foreach ($todaysSessions as $session) {
         $memberId = $session['member_id'];
         if (!isset($memberAttendance[$memberId])) {
@@ -370,7 +388,9 @@ function sendDailyReport($db) {
                 'username' => $session['username'],
                 'full_name' => $session['full_name'],
                 'sessions' => [],
-                'totalSeconds' => 0
+                'extraHours' => [],
+                'totalSessionSeconds' => 0,
+                'totalExtraSeconds' => 0
             ];
         }
 
@@ -381,7 +401,32 @@ function sendDailyReport($db) {
             'clock_out' => $session['clock_out_time'],
             'duration' => $duration
         ];
-        $memberAttendance[$memberId]['totalSeconds'] += $duration;
+        $memberAttendance[$memberId]['totalSessionSeconds'] += $duration;
+    }
+    
+    // Extra hours calculation
+    
+    foreach ($todaysExtraHours as $extra) {
+        $memberId = $extra['member_id'];
+        if (!isset($memberAttendance[$memberId])) {
+            $memberAttendance[$memberId] = [
+                'username' => $extra['username'],
+                'full_name' => $extra['full_name'],
+                'sessions' => [],
+                'extraHours' => [],
+                'totalSessionSeconds' => 0,
+                'totalExtraSeconds' => 0
+            ];
+        }
+
+        $endTime = $extra['clock_out_time'] ?: date('Y-m-d H:i:s');
+        $duration = strtotime($endTime) - strtotime($extra['clock_in_time']);
+        $memberAttendance[$memberId]['extraHours'][] = [
+            'clock_in' => $extra['clock_in_time'],
+            'clock_out' => $extra['clock_out_time'],
+            'duration' => $duration
+        ];
+        $memberAttendance[$memberId]['totalExtraSeconds'] += $duration;
     }
 
     $allMembers = [];
@@ -395,18 +440,30 @@ function sendDailyReport($db) {
         return !in_array($member['id'], $presentMembers);
     });
 
-    $message = "**Team Daedalus 2839 - Daily Report for " . date('F j, Y') . "**\n\n";
+    $message = "**Team Daedalus 2839 - Session Report for " . date('F j, Y') . "**\n\n";
     $message .= "**Present Members:**\n";
     if (empty($memberAttendance)) {
         $message .= "No members were present today\n";
     } else {
         uasort($memberAttendance, function($a, $b) {
-            return $b['totalSeconds'] - $a['totalSeconds'];
+            return ($b['totalSessionSeconds'] + $b['totalExtraSeconds']) - ($a['totalSessionSeconds'] + $a['totalExtraSeconds']);
         });
 
         foreach ($memberAttendance as $member) {
-            $totalTime = formatDurationSeconds($member['totalSeconds']);
-            $message .= "- **{$member['full_name']}** (@{$member['username']}): $totalTime (".count($member['sessions'])." session" . (count($member['sessions']) > 1 ? 's' : '') . ")\n";
+            $sessionTime = formatDurationSeconds($member['totalSessionSeconds']);
+            $extraTime = formatDurationSeconds($member['totalExtraSeconds']);
+            $totalTime = formatDurationSeconds($member['totalSessionSeconds'] + $member['totalExtraSeconds']);
+            
+            $sessionCount = count($member['sessions']);
+            $extraCount = count($member['extraHours']);
+            
+            $message .= "- **{$member['full_name']}** (@{$member['username']}): $totalTime total\n";
+            if ($sessionCount > 0) {
+                $message .= "  └ Session: $sessionTime ($sessionCount session" . ($sessionCount > 1 ? 's' : '') . ")\n";
+            }
+            if ($extraCount > 0) {
+                $message .= "  └ Extra: $extraTime ($extraCount period" . ($extraCount > 1 ? 's' : '') . ")\n";
+            }
         }
     }
 
@@ -419,6 +476,7 @@ function sendDailyReport($db) {
         }
     }
 
+    // Change Webhook URL
     $webhookUrl = "";
     $ch = curl_init($webhookUrl);
     curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
@@ -445,22 +503,10 @@ while ($row = $result->fetchArray(SQLITE3_ASSOC)) {
 
 $allSessions = [];
 $memberStats = [];
-$futureAbsences = [];
 if (isset($_COOKIE[$adminCookieName]) && $_COOKIE[$adminCookieName] === '1') {
     $result = $db->query("SELECT * FROM sessions ORDER BY id DESC");
     while ($row = $result->fetchArray(SQLITE3_ASSOC)) {
         $allSessions[] = $row;
-    }
-    
-    $result = $db->query("
-        SELECT fa.*, m.full_name, m.username 
-        FROM future_absences fa 
-        JOIN members m ON fa.member_id = m.id 
-        WHERE fa.absence_date >= date('now') 
-        ORDER BY fa.absence_date ASC
-    ");
-    while ($row = $result->fetchArray(SQLITE3_ASSOC)) {
-        $futureAbsences[] = $row;
     }
     
     foreach ($members as $member) {
@@ -473,6 +519,9 @@ if (isset($_COOKIE[$adminCookieName]) && $_COOKIE[$adminCookieName] === '1') {
         ");
         
         $totalSeconds = 0;
+        $extraHoursSeconds = 0;
+        
+        // Calculate session time
         $result = $db->query("
             SELECT clock_in_time, clock_out_time 
             FROM attendance 
@@ -480,6 +529,17 @@ if (isset($_COOKIE[$adminCookieName]) && $_COOKIE[$adminCookieName] === '1') {
         ");
         while ($row = $result->fetchArray(SQLITE3_ASSOC)) {
             $totalSeconds += strtotime($row['clock_out_time']) - strtotime($row['clock_in_time']);
+        }
+        
+        // Extra hours calculation
+        
+        $result = $db->query("
+            SELECT clock_in_time, clock_out_time 
+            FROM extra_hours 
+            WHERE member_id = $memberId AND clock_out_time IS NOT NULL
+        ");
+        while ($row = $result->fetchArray(SQLITE3_ASSOC)) {
+            $extraHoursSeconds += strtotime($row['clock_out_time']) - strtotime($row['clock_in_time']);
         }
         
         $avgSessionTime = $timesShowedUp > 0 ? $totalSeconds / $timesShowedUp : 0;
@@ -527,6 +587,8 @@ if (isset($_COOKIE[$adminCookieName]) && $_COOKIE[$adminCookieName] === '1') {
             'times_showed_up' => $timesShowedUp,
             'total_hours' => formatDurationSeconds($totalSeconds),
             'total_seconds' => $totalSeconds,
+            'extra_hours' => formatDurationSeconds($extraHoursSeconds),
+            'extra_hours_seconds' => $extraHoursSeconds,
             'avg_session_time' => formatDurationSeconds($avgSessionTime),
             'last_attendance' => $lastAttendance,
             'total_sessions' => $totalSessions,
@@ -537,23 +599,8 @@ if (isset($_COOKIE[$adminCookieName]) && $_COOKIE[$adminCookieName] === '1') {
     }
 }
 
-$loggedIn = isset($_SESSION['member_id']);
-$memberName = $loggedIn ? $_SESSION['member_name'] : '';
-$memberId = $loggedIn ? $_SESSION['member_id'] : null;
-
-$clockedIn = false;
-$userAbsences = [];
-if ($loggedIn && $currentSession) {
-    $clockedIn = $db->querySingle("SELECT id FROM attendance WHERE member_id = $memberId AND session_id = {$currentSession['id']} AND clock_out_time IS NULL");
-}
-
-if ($loggedIn) {
-
-    $result = $db->query("SELECT * FROM future_absences WHERE member_id = $memberId AND absence_date >= date('now') ORDER BY absence_date ASC");
-    while ($row = $result->fetchArray(SQLITE3_ASSOC)) {
-        $userAbsences[] = $row;
-    }
-}
+$currentTime = date('H:i:s');
+$currentDate = date('Y-m-d');
 
 $uptime = '';
 if ($currentSession) {
@@ -573,7 +620,7 @@ if ($currentSession) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Team Daedalus 2839 - <?= ucfirst($stage) ?></title>
+    <title>Team Daedalus 2839 - <?= $stage === 'admin' ? 'Admin Dashboard' : 'Attendance System' ?></title>
     <style>
         :root {
             --primary: #2c3e50;
@@ -660,9 +707,6 @@ if ($currentSession) {
         }
         .btn-warning {
             background-color: var(--warning);
-        }
-        .btn-logout {
-            background-color: var(--gray);
         }
         .notification {
             padding: 10px;
@@ -766,7 +810,7 @@ if ($currentSession) {
     <div class="container">
         <header>
             <h1>Team Daedalus 2839</h1>
-            <p><?= $stage === 'admin' ? 'Admin Dashboard' : ($stage === 'clock' ? 'Clock In/Out' : 'Login') ?></p>
+            <p><?= $stage === 'admin' ? 'Admin Dashboard' : 'Attendance System' ?></p>
         </header>
 
         <?php if (isset($_GET['message'])): ?>
@@ -782,130 +826,66 @@ if ($currentSession) {
         <?php endif; ?>
 
         <!-- Session info displayed on all pages -->
+        
         <div class="session-info">
             <p>Current session status: <strong><?= $currentSession ? 'Active' : 'Inactive' ?></strong></p>
             <?php if ($currentSession): ?>
                 <p>Started: <?= date('M j, Y g:i A', strtotime($currentSession['start_time'])) ?></p>
                 <p>Uptime: <?= $uptime ?></p>
+                <?php
+                $currentlyInSession = $db->querySingle("SELECT COUNT(*) FROM attendance WHERE session_id = {$currentSession['id']} AND clock_out_time IS NULL");
+                ?>
+                <p>Currently in session: <strong><?= $currentlyInSession ?> members</strong></p>
+            <?php else: ?>
+                <?php
+                $currentlyInExtra = $db->querySingle("SELECT COUNT(*) FROM extra_hours WHERE clock_out_time IS NULL");
+                ?>
+                <p>Currently in extra hours: <strong><?= $currentlyInExtra ?> members</strong></p>
             <?php endif; ?>
         </div>
 
         <!-- Login Page -->
+        
         <?php if ($stage === 'login'): ?>
             <div class="card">
-                <h2>Member Login</h2>
-                <p style="margin-bottom: 20px; color: #666;">Enter your personal credential (PIN, barcode, or password) to log in quickly and securely.</p>
+                <h2>Scan Barcode or Enter Code</h2>
+                <p style="margin-bottom: 20px; color: #666;">
+                    • Scan your member barcode to clock in/out<br>
+                    • <strong>Session active:</strong> Clock in/out of session time<br>
+                    • <strong>No session:</strong> Clock in/out of extra hours<br>
+                </p>
                 <form autocomplete="off" method="post">
                     <div class="form-group">
-               <label for="pin">Enter your credential</label>
-               <input type="password" id="pin" name="pin" autocomplete="new-password" required autofocus
-                   placeholder="Enter your credential (PIN, barcode, or password)" style="height:40px; font-size: 12px; text-align: center;"
-                   onkeydown="if(event.key==='Enter'){ this.form.submit(); }">
+                        <input type="password" id="pin" name="pin" autocomplete="new-password" required autofocus
+                               placeholder="Scan barcode or enter code" style="height:50px; font-size: 18px; text-align: center;"
+                               onkeydown="if(event.key==='Enter'){ this.form.submit(); }">
                     </div>
-                    <button type="submit" name="action" value="login" class="btn" style="width: 100%; padding: 15px; font-size: 18px;">Login</button>
+                    <button type="submit" name="action" value="login" class="btn" style="width: 100%; padding: 15px; font-size: 18px;">Submit</button>
                 </form>
                 <div style="margin-top: 20px; padding: 10px; background-color: #e3f2fd; border-radius: 4px; font-size: 14px;">
-                    <strong>Forgot ID?</strong> Please contact a leadership member for asseistance.
+                    <strong>Need Help?</strong> Contact leadership for assistance with your barcode or credentials.
                 </div>
-            </div>
-        <?php endif; ?>
-
-        <!-- Clock In/Out Page -->
-        <?php if ($stage === 'clock' && $loggedIn): ?>
-            <div class="nav">
-                <a href="?stage=login&action=logout" class="btn-logout">Logout</a>
-            </div>
-
-            <div class="card">
-                <h2>Welcome, <?= htmlspecialchars($memberName) ?></h2>
-
-                <?php if ($currentSession): ?>
-                    <?php if ($clockedIn): ?>
-                        <p>You are currently <strong style="color: var(--success);">clocked in</strong></p>
-                        <form autocomplete="off" method="post">
-                            <button type="submit" name="action" value="clock_out" class="btn-danger">Clock Out</button>
-                        </form>
-                    <?php else: ?>
-                        <p>You are currently <strong style="color: var(--danger);">clocked out</strong></p>
-                        <form autocomplete="off" method="post">
-                            <button type="submit" name="action" value="clock_in" class="btn-success">Clock In</button>
-                        </form>
-                    <?php endif; ?>
-                <?php else: ?>
-                    <p>There is currently no active lab session.</p>
-                <?php endif; ?>
-            </div>
-
-            <!-- Mark Future Absence -->
-            <div class="card">
-                <h2>Mark Future Absence</h2>
-                <p style="margin-bottom: 15px; color: #666;">Mark days you won't be attending in advance.</p>
-                <form autocomplete="off" method="post">
-                    <div class="form-group">
-                        <label for="absence_date">Absence Date</label>
-                        <input type="date" id="absence_date" name="absence_date" required 
-                               min="<?= date('Y-m-d') ?>" style="width: 100%;">
-                    </div>
-                    <div class="form-group">
-                        <label for="reason">Reason (Optional)</label>
-                        <input type="text" id="reason" name="reason" 
-                               placeholder="e.g., Vacation, Doctor appointment, etc." style="width: 100%;">
-                    </div>
-                    <button type="submit" name="action" value="mark_absence" class="btn-warning">Mark Absence</button>
-                </form>
-            </div>
-
-            <!-- Your Future Absences -->
-            <?php if (!empty($userAbsences)): ?>
-                <div class="card">
-                    <h2>Your Scheduled Absences</h2>
-                    <div class="member-list">
-                        <?php foreach ($userAbsences as $absence): ?>
-                            <div class="member-card" style="background-color: #fff3cd; border-color: #ffeaa7;">
-                                <div style="display: flex; justify-content: space-between; align-items: center;">
-                                    <div>
-                                        <strong><?= date('l, M j, Y', strtotime($absence['absence_date'])) ?></strong>
-                                        <?php if ($absence['reason']): ?>
-                                            <br><small style="color: #666;">Reason: <?= htmlspecialchars($absence['reason']) ?></small>
-                                        <?php endif; ?>
-                                    </div>
-                                    <small style="color: #999;">Marked <?= date('M j', strtotime($absence['created_at'])) ?></small>
-                                </div>
-                            </div>
-                        <?php endforeach; ?>
-                    </div>
-                </div>
-            <?php endif; ?>
-        <?php endif; ?>
-
-        <!-- Admin Login Page -->
-        <?php if ($stage === 'admin_login'): ?>
-            <div class="card">
-                <h2>Admin Login</h2>
-                <form autocomplete="off" method="post">
-                    <div class="form-group">
-                        <label for="password">Admin Password</label>
-                        <input type="password" id="password" name="password" autocomplete="new-password" required>
-                    </div>
-                    <button type="submit" name="action" value="admin_login" class="btn">Login</button>
-                </form>
             </div>
         <?php endif; ?>
 
         <!-- Admin Dashboard -->
+        
         <?php if ($stage === 'admin' && isset($_COOKIE[$adminCookieName]) && $_COOKIE[$adminCookieName] === '1'): ?>
             <div class="nav">
                 <a href="?stage=login">User Login</a>
-                <a href="?logout">Logout</a>
+            </div>
+
+            <div class="card">
+                <h2>System Codes</h2>
+                <div class="stats-grid">
+                    <div><strong>Admin Access:</strong> <?= $adminCode ?></div>
+                    <div><strong>Start Session:</strong> <?= $startSessionCode ?></div>
+                    <div><strong>End Session:</strong> <?= $endSessionCode ?></div>
+                </div>
             </div>
 
             <div class="action-buttons">
                 <form autocomplete="off" method="post">
-                    <?php if (!$currentSession): ?>
-                        <button type="submit" name="action" value="start_session" style="margin-bottom:5px" class="btn-success">Start Session</button>
-                    <?php else: ?>
-                        <button type="submit" name="action" value="end_session" style="margin-bottom:5px" class="btn-danger">End Session</button>
-                    <?php endif; ?>
                     <button type="submit" name="action" value="send_report" class="btn">Send Daily Report</button>
                 </form>
             </div>
@@ -1035,7 +1015,8 @@ if ($currentSession) {
                                 <div>Username: <?= htmlspecialchars($member['username']) ?> | PIN: <?= htmlspecialchars($member['pin']) ?></div>
                                 <div class="stats-grid">
                                     <div><strong>Times Showed Up:</strong> <?= $stats['times_showed_up'] ?></div>
-                                    <div><strong>Total Hours:</strong> <?= $stats['total_hours'] ?></div>
+                                    <div><strong>Session Hours:</strong> <?= $stats['total_hours'] ?></div>
+                                    <div><strong>Extra Hours:</strong> <?= $stats['extra_hours'] ?></div>
                                     <div><strong>Avg Session Time:</strong> <?= $stats['avg_session_time'] ?></div>
                                     <div><strong>Attendance Rate:</strong> <?= $stats['attendance_rate'] ?>%</div>
                                     <div><strong>Late Arrivals:</strong> <?= $stats['late_arrivals'] ?></div>
@@ -1051,35 +1032,6 @@ if ($currentSession) {
                                         <?php endforeach; ?>
                                     </div>
                                 <?php endif; ?>
-                            </div>
-                        <?php endforeach; ?>
-                    <?php endif; ?>
-                </div>
-            </div>
-
-            <!-- Future Absences Section -->
-            <div class="card">
-                <h2>Scheduled Absences</h2>
-                <div class="member-list">
-                    <?php if (empty($futureAbsences)): ?>
-                        <p>No scheduled absences.</p>
-                    <?php else: ?>
-                        <?php foreach ($futureAbsences as $absence): ?>
-                            <div class="member-card" style="background-color: #fff3cd; border-color: #ffeaa7;">
-                                <div style="display: flex; justify-content: space-between; align-items: center;">
-                                    <div>
-                                        <strong><?= htmlspecialchars($absence['full_name']) ?></strong> (@<?= htmlspecialchars($absence['username']) ?>)
-                                        <br><strong>Date:</strong> <?= date('l, M j, Y', strtotime($absence['absence_date'])) ?>
-                                        <?php if ($absence['reason']): ?>
-                                            <br><strong>Reason:</strong> <?= htmlspecialchars($absence['reason']) ?>
-                                        <?php endif; ?>
-                                        <br><small style="color: #666;">Marked on <?= date('M j, Y', strtotime($absence['created_at'])) ?></small>
-                                    </div>
-                                    <form autocomplete="off" method="post" style="margin: 0;">
-                                        <input type="hidden" name="absence_id" value="<?= $absence['id'] ?>">
-                                        <button type="submit" name="action" value="clear_absence" class="btn-danger" style="padding: 5px 10px; font-size: 12px;">Clear</button>
-                                    </form>
-                                </div>
                             </div>
                         <?php endforeach; ?>
                     <?php endif; ?>
@@ -1162,12 +1114,6 @@ if ($currentSession) {
     </div>
 
     <script>
-        document.addEventListener('keydown', function(e) {
-            if (e.ctrlKey && e.altKey && e.key === 'd') {
-                window.location.href = "?stage=admin_login";
-            }
-        });
-
         document.getElementById('update_member_id')?.addEventListener('change', function() {
             const memberId = this.value;
             if (!memberId) return;
