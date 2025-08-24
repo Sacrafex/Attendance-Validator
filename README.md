@@ -26,12 +26,6 @@ A secure, feature-rich PHP-based attendance tracking system designed for team ma
   - Average attendance rates
   - Active members count
 
-### Absence Management
-- **Future absence scheduling** - Members can mark planned absences
-- **Optional absence reasons** - Add context to scheduled absences
-- **Admin absence overview** - View and manage all team absences
-- **Automatic absence validation** - Only future dates can be marked
-
 ### Session Management
 - **Active session tracking** - Real-time session status and uptime
 - **Automatic clock-out** - End sessions and clock out all members
@@ -104,19 +98,11 @@ A secure, feature-rich PHP-based attendance tracking system designed for team ma
 
 1. **Login:**
    - Visit the application URL
-   - Enter your unique PIN (no username required)
-   - Click "Login"
+   - Enter your unique PIN (no username required) / Scan Barcode
 
 2. **Clock In/Out:**
-   - Use "Clock In" when arriving
-   - Use "Clock Out" when leaving
+   - Scan Barcode to Clock both In and Out.
    - View current session status and uptime
-
-3. **Schedule Absences:**
-   - Navigate to "Mark Future Absence"
-   - Select the date you'll be absent
-   - Optionally add a reason
-   - View your scheduled absences
 
 ### For Administrators
 
@@ -144,8 +130,6 @@ A secure, feature-rich PHP-based attendance tracking system designed for team ma
 5. **Data Management:**
    - Clear individual member statistics
    - Delete user accounts permanently
-   - Clean up session history
-   - Manage scheduled absences
 
 ## Database Schema
 
@@ -171,8 +155,8 @@ A secure, feature-rich PHP-based attendance tracking system designed for team ma
 
 ## Quick Access
 
-- **Admin Panel**: `Ctrl + Alt + D`
-- **User Login**: Default page
+- **Admin Panel**: Scan Admin Barcode
+- **User Login**: Scan User Barcode
 - **Session Status**: Displayed on all pages
 
 ## Statistics Tracked
