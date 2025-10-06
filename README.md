@@ -1,4 +1,4 @@
-# Attendance Validator
+# Attendance Validator - (Version 2 will be released soon!)
 ### Made for Team Daedalus 2839
 
 A secure, feature-rich PHP-based attendance tracking system designed for team management with comprehensive statistics, absence scheduling, and administrative controls.
