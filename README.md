@@ -1,5 +1,5 @@
-# Attendance Validator - (Version 2 will be released soon!)
-### Made for Team Daedalus 2839
+# YWT (You Weren't There) Attendance System
+### (Version 2 will be released soon!)
 
 A secure, feature-rich PHP-based attendance tracking system designed for team management with comprehensive statistics, absence scheduling, and administrative controls.
 
